@@ -1,0 +1,112 @@
+name: Daily Brief
+
+on:
+  schedule:
+    # GitHub 예약 실행은 트래픽이 몰리면 늦어지거나 빠질 수 있어서 아침에 여러 번 돌린다.
+    # 그날 전송에 성공하면 이후 실행은 바로 끝난다. (시간은 UTC, 한국시간 = UTC+9)
+    # 정각은 GitHub 전체 부하가 가장 높아서 일부러 피했다.
+    - cron: "3 22 * * *"    # 07:03 KST
+    - cron: "23 22 * * *"   # 07:23 KST
+    - cron: "43 22 * * *"   # 07:43 KST
+    - cron: "13 23 * * *"   # 08:13 KST
+    - cron: "47 23 * * *"   # 08:47 KST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "오늘 이미 보냈어도 다시 전송"
+        type: boolean
+        default: false
+      dry_run:
+        description: "전송하지 않고 결과만 로그로 확인"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # 보낸 소식 기록(state/)을 커밋하기 위해 필요
+
+concurrency:
+  group: daily-brief   # 실행이 겹치지 않게 하나씩 순서대로
+  cancel-in-progress: false
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 앞선 실행이 커밋한 최신 기록을 받도록 브랜치 끝을 체크아웃
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --retries 5 -r requirements.txt
+
+      - name: Send brief
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          KAKAO_NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/kakao_refresh_token
+          CALENDAR_ICS_URLS: ${{ secrets.CALENDAR_ICS_URLS }}
+        run: |
+          args=""
+          if [ "${{ inputs.force }}" = "true" ]; then args="$args --force"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then args="$args --dry-run"; fi
+          python -m assistant.main $args
+
+      # 카카오 리프레시 토큰은 약 60일이면 만료된다. 만료 1개월 전부터 카카오가 새 토큰을
+      # 주는데, 그 값으로 KAKAO_REFRESH_TOKEN 시크릿을 자동 교체한다. (GH_PAT 시크릿 필요)
+      # 전송이 실패했더라도 토큰은 이미 바뀌었을 수 있으니 항상 실행한다.
+      - name: Rotate Kakao refresh token
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/kakao_refresh_token
+        run: |
+          if [ ! -s "$TOKEN_FILE" ]; then
+            echo "토큰 교체 필요 없음"
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::카카오 리프레시 토큰이 곧 만료됩니다. GH_PAT 시크릿을 추가하면 자동 교체되고, 아니면 'python -m assistant.kakao_auth'로 새 토큰을 받아 KAKAO_REFRESH_TOKEN을 바꿔 주세요."
+            exit 0
+          fi
+          for i in 1 2 3 4 5; do
+            if gh secret set KAKAO_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY" < "$TOKEN_FILE"; then
+              echo "KAKAO_REFRESH_TOKEN 시크릿 교체 완료 (${i}번째 시도)"
+              rm -f "$TOKEN_FILE"
+              exit 0
+            fi
+            echo "시크릿 교체 실패 (${i}/5), $((i * 10))초 후 재시도"
+            sleep $((i * 10))
+          done
+          exit 1
+
+      - name: Save sent-news memory
+        if: success() && inputs.dry_run != true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          if git diff --cached --quiet; then
+            echo "기록 변경 없음"
+            exit 0
+          fi
+          git commit -m "chore: update sent news memory [skip ci]"
+          # push도 거절될 수 있으니 성공할 때까지 여러 번 시도하고, 성공하면 멈춘다.
+          for i in 1 2 3 4 5; do
+            if git pull --rebase --quiet && git push --quiet; then
+              echo "기록 저장 완료 (${i}번째 시도)"
+              exit 0
+            fi
+            echo "push 실패 (${i}/5), $((i * 15))초 후 재시도"
+            sleep $((i * 15))
+          done
+          exit 1

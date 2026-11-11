@@ -1,0 +1,45 @@
+# 공개해도 되는 설정. 비밀 값(API 키, 토픽, 캘린더 주소)은 GitHub Secrets에 넣는다.
+
+timezone: Asia/Seoul
+
+location:          # 날씨를 볼 위치
+  name: 서울
+  latitude: 37.5665
+  longitude: 126.9780
+
+news:
+  max_age_hours: 36       # 이보다 오래된 기사는 무시
+  per_feed_limit: 15      # 피드당 최대 기사 수
+  max_candidates: 30      # Gemini에 넘길 새 기사 최대 수
+  in_brief: 6             # 알림에 들어갈 뉴스 최대 개수
+  feeds:
+    - name: 주요 뉴스
+      url: https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko
+    - name: 경제
+      url: https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=ko&gl=KR&ceid=KR:ko
+    - name: IT/과학
+      url: https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=ko&gl=KR&ceid=KR:ko
+    # 관심 키워드 검색 피드도 넣을 수 있다:
+    # - name: AI
+    #   url: https://news.google.com/rss/search?q=%EC%9D%B8%EA%B3%B5%EC%A7%80%EB%8A%A5&hl=ko&gl=KR&ceid=KR:ko
+
+memory:
+  state_file: state/sent_news.json
+  retention_days: 14      # 보낸 소식을 며칠 동안 기억할지
+
+gemini:
+  model: gemini-3.8-flash # GEMINI_MODEL 환경 변수로 덮어쓸 수 있음
+
+notify:
+  title: 📋 오늘의 브리핑
+
+kakao:
+  # 메시지 버튼을 누르면 열릴 주소. 이 도메인을 카카오 개발자 콘솔
+  # [앱 > 플랫폼 > Web > 사이트 도메인]에 등록해야 버튼이 동작한다.
+  link_url: https://news.google.com/home?hl=ko&gl=KR&ceid=KR:ko
+  button_title: 뉴스 더보기
+
+retry:                    # 요청이 거절되면 성공할 때까지 이 횟수만큼 재시도
+  attempts: 6
+  base_delay_seconds: 2   # 2초, 4초, 8초... 로 늘어남
+  max_delay_seconds: 60
